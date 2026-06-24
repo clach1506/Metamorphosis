@@ -15,21 +15,26 @@ import torch.nn.functional as Fnn
 
 from Kernel import GaussianKernel
 from Pyramid import ResolutionPyramid
+from Convergence import ConvergenceTracker
 
 
 class SimplifiedMetamorphosisSolver:
     def __init__(self, T=10, sigma2=0.05, lambda_data=2000.0, kernel_sigma_frac=0.03,
                  pyramid_scales=(1 / 8, 1 / 4, 1 / 2, 1.0),
                  level_iters=(400, 300, 150, 80),
-                 level_lrs=(0.05, 0.03, 0.02, 0.01)):
+                 level_lrs=(0.05, 0.03, 0.02, 0.01),
+                 convergence_tol=1e-4, convergence_patience=30, convergence_min_iters=30):
         self.T = T
         self.dt = 1.0 / T
         self.sigma2 = sigma2
         self.lambda_data = lambda_data
         self.kernel_sigma_frac = kernel_sigma_frac
         self.pyramid_scales = pyramid_scales
-        self.level_iters = level_iters
+        self.level_iters = level_iters  # per-level iteration cap; may stop earlier on convergence
         self.level_lrs = level_lrs
+        self.convergence_tol = convergence_tol
+        self.convergence_patience = convergence_patience
+        self.convergence_min_iters = convergence_min_iters
         self.history = []
 
     @staticmethod
@@ -80,7 +85,9 @@ class SimplifiedMetamorphosisSolver:
 
             if verbose:
                 print(f"\n--- Level {level + 1}/{len(pyramid)} ({h}x{w}, "
-                      f"sigma_K={kernel.sigma:.2f}, lr={lr}, {n_iter} iters) ---")
+                      f"sigma_K={kernel.sigma:.2f}, lr={lr}, max {n_iter} iters) ---")
+            tracker = ConvergenceTracker(self.convergence_tol, self.convergence_patience, self.convergence_min_iters)
+            n_pixels = h * w
             for it in range(n_iter):
                 optimizer.zero_grad()
                 a_final, energy_v, energy_z = simulate_and_energy()
@@ -88,9 +95,21 @@ class SimplifiedMetamorphosisSolver:
                 loss = energy_v + (1.0 / self.sigma2) * energy_z + self.lambda_data * data_term
                 loss.backward()
                 optimizer.step()
-                self.history.append((level, loss.item(), energy_v.item(), energy_z.item(), data_term.item()))
+                loss_val = loss.item()
+                data_term_val = data_term.item()
+                self.history.append((level, loss_val, energy_v.item(), energy_z.item(), data_term_val))
+                # RMS mismatch per pixel between the reconstructed a(T) and the
+                # real target a1, in [0,1] intensity scale -- the interpretable
+                # "is this accurate" number, as opposed to the raw sums above.
+                rms_data = (data_term_val / n_pixels) ** 0.5
                 if verbose and (it % 100 == 0 or it == n_iter - 1):
-                    print(f"  iter {it:4d}  loss={loss.item():12.4f}  E_v={energy_v.item():10.4f}  "
-                          f"E_z={energy_z.item():10.4f}  data_term={data_term.item():10.5f}")
+                    print(f"  iter {it:4d}  loss={loss_val:12.4f}  E_v={energy_v.item():10.4f}  "
+                          f"E_z={energy_z.item():10.4f}  data_term={data_term_val:10.5f}  "
+                          f"rms={rms_data:.5f} (~{rms_data * 255:.2f}/255)")
+                if tracker.step(loss_val):
+                    if verbose:
+                        print(f"  converged at iter {it} (no improvement for {self.convergence_patience} iters)  "
+                              f"rms={rms_data:.5f} (~{rms_data * 255:.2f}/255)")
+                    break
 
         return w_vx, w_vy, z_raw, a0, a1

@@ -6,6 +6,13 @@
 # The first term is the kinetic energy of the deformation (RKHS norm of v,
 # computed as ||w||_2^2 since v = K^(1/2) w). The second is the data term:
 # mismatch between each image and the next one, transported back by the flow.
+#
+# `lambda` (lambda_data) is the book's residual weight 1/sigma^2 in disguise:
+# writing the implicit residual as z := mismatch/dt, the data term equals
+# lambda_data * dt^-2 * (dt*z)^2 = lambda_data * z^2. So raising lambda_data
+# penalizes residual/mismatch harder and pushes more of the change onto
+# genuine deformation v instead of letting the free a(1..T-1) states drift;
+# lowering it does the opposite (favors residual).
 import torch
 
 from VelocityField import VelocityField

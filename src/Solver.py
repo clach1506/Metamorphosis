@@ -10,20 +10,25 @@ from ImageTrajectory import ImageTrajectory
 from Warp import SemiLagrangianWarp
 from Energy import MetamorphosisEnergy
 from Pyramid import ResolutionPyramid
+from Convergence import ConvergenceTracker
 
 
 class MetamorphosisSolver:
     def __init__(self, T=10, lambda_data=20.0, kernel_sigma_frac=0.03,
                  pyramid_scales=(1 / 8, 1 / 4, 1 / 2, 1.0),
                  level_iters=(400, 300, 250, 300),
-                 level_lrs=(0.01, 0.008, 0.005, 0.005)):
+                 level_lrs=(0.01, 0.008, 0.005, 0.005),
+                 convergence_tol=1e-4, convergence_patience=30, convergence_min_iters=30):
         self.T = T
         self.dt = 1.0 / T
         self.lambda_data = lambda_data
         self.kernel_sigma_frac = kernel_sigma_frac
         self.pyramid_scales = pyramid_scales
-        self.level_iters = level_iters
+        self.level_iters = level_iters  # per-level iteration cap; may stop earlier on convergence
         self.level_lrs = level_lrs
+        self.convergence_tol = convergence_tol
+        self.convergence_patience = convergence_patience
+        self.convergence_min_iters = convergence_min_iters
         self.history = []
 
     def fit(self, a0_full: torch.Tensor, a1_full: torch.Tensor, verbose: bool = True):
@@ -51,15 +56,29 @@ class MetamorphosisSolver:
 
             if verbose:
                 print(f"\n--- Level {level + 1}/{len(pyramid)} ({h}x{w}, "
-                      f"sigma_K={kernel.sigma:.2f}, lr={lr}, {n_iter} iters) ---")
+                      f"sigma_K={kernel.sigma:.2f}, lr={lr}, max {n_iter} iters) ---")
+            tracker = ConvergenceTracker(self.convergence_tol, self.convergence_patience, self.convergence_min_iters)
+            n_data_elems = self.T * h * w
             for it in range(n_iter):
                 optimizer.zero_grad()
                 loss, e_kinetic, e_data = energy_fn.compute(velocity, trajectory, warp)
                 loss.backward()
                 optimizer.step()
-                self.history.append((level, loss.item(), e_kinetic.item(), e_data.item()))
+                loss_val = loss.item()
+                e_data_val = e_data.item()
+                self.history.append((level, loss_val, e_kinetic.item(), e_data_val))
+                # RMS mismatch per pixel, in the same [0,1] intensity scale as the
+                # images -- unlike the raw sums above, this is comparable across
+                # runs/resolutions and tells you how accurate the fit actually is.
+                rms_data = (e_data_val / n_data_elems) ** 0.5
                 if verbose and (it % 100 == 0 or it == n_iter - 1):
-                    print(f"  iter {it:4d}  loss={loss.item():12.4f}  "
-                          f"E_kin={e_kinetic.item():10.4f}  E_data={e_data.item():12.6f}")
+                    print(f"  iter {it:4d}  loss={loss_val:12.4f}  "
+                          f"E_kin={e_kinetic.item():10.4f}  E_data={e_data_val:12.6f}  "
+                          f"rms={rms_data:.5f} (~{rms_data * 255:.2f}/255)")
+                if tracker.step(loss_val):
+                    if verbose:
+                        print(f"  converged at iter {it} (no improvement for {self.convergence_patience} iters)  "
+                              f"rms={rms_data:.5f} (~{rms_data * 255:.2f}/255)")
+                    break
 
         return velocity, trajectory, warp

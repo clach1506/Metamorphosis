@@ -2,6 +2,7 @@
 # trajectory a(t) together with the velocity field v(t) that transports it,
 # and the implicit residual z(t) it leaves behind. This is the object the
 # rest of the project (visualization, export) should consume.
+import json
 import os
 
 import numpy as np
@@ -13,15 +14,20 @@ from Solver import MetamorphosisSolver
 
 class Metamorphosis:
     def __init__(self, a_traj: np.ndarray, v_traj_x: np.ndarray, v_traj_y: np.ndarray,
-                 z_traj: np.ndarray, a_target: np.ndarray = None):
-        self.a_traj = a_traj      # (T+1, H, W)
-        self.v_traj_x = v_traj_x  # (T, H, W)
-        self.v_traj_y = v_traj_y
+                 z_traj: np.ndarray, a_target: np.ndarray = None, history: np.ndarray = None,
+                 path_a0: str = None, path_a1: str = None, solver_config: dict = None):
+        self.a_traj = a_traj      # (T+1, H, W) -- at whatever resolution the solver ran at,
+        self.v_traj_x = v_traj_x  # (T, H, W)      not necessarily the input images' native size
+        self.v_traj_y = v_traj_y  # (see solver_config["pyramid_scales"])
         self.z_traj = z_traj      # (T, H, W), implicit residual
         # The true target a1: equal to a_traj[-1] for the exact/collocation
         # scheme (a(T) is anchored to it), but a genuine reconstruction error
         # may exist for other schemes (e.g. shooting), so keep it distinct.
         self.a_target = a_traj[-1] if a_target is None else a_target
+        self.history = history    # (n_iters, 4): columns (level, loss, E_kinetic, E_data)
+        self.path_a0 = path_a0
+        self.path_a1 = path_a1
+        self.solver_config = solver_config or {}
 
     @classmethod
     def fit(cls, path_a0: str, path_a1: str, **solver_kwargs) -> "Metamorphosis":
@@ -46,7 +52,15 @@ class Metamorphosis:
             v_traj_y = torch.stack(v_traj_y).numpy()
             z_traj = torch.stack(z_traj).numpy()
 
-        return cls(a_traj, v_traj_x, v_traj_y, z_traj, a_target=trajectory.a1.numpy())
+        solver_config = {
+            "T": solver.T, "lambda_data": solver.lambda_data,
+            "kernel_sigma_frac": solver.kernel_sigma_frac,
+            "pyramid_scales": list(solver.pyramid_scales),
+            "native_shape": list(a0.shape),
+        }
+        return cls(a_traj, v_traj_x, v_traj_y, z_traj,
+                   a_target=trajectory.a1.numpy(), history=np.array(solver.history),
+                   path_a0=path_a0, path_a1=path_a1, solver_config=solver_config)
 
     @classmethod
     def load(cls, directory: str) -> "Metamorphosis":
@@ -55,7 +69,13 @@ class Metamorphosis:
         v_traj_y = np.load(f"{directory}/v_traj_y.npy")
         z_traj = np.load(f"{directory}/z_traj.npy")
         a_target = np.load(f"{directory}/a1.npy")
-        return cls(a_traj, v_traj_x, v_traj_y, z_traj, a_target=a_target)
+        history_path = f"{directory}/history.npy"
+        history = np.load(history_path) if os.path.exists(history_path) else None
+        meta_path = f"{directory}/meta.json"
+        meta = json.load(open(meta_path)) if os.path.exists(meta_path) else {}
+        return cls(a_traj, v_traj_x, v_traj_y, z_traj, a_target=a_target, history=history,
+                   path_a0=meta.get("path_a0"), path_a1=meta.get("path_a1"),
+                   solver_config=meta.get("solver_config"))
 
     def deformation_magnitude(self) -> np.ndarray:
         # Cumulative |v| over time: how much geometric deformation happened where.
@@ -73,6 +93,11 @@ class Metamorphosis:
         np.save(f"{output_dir}/z_traj.npy", self.z_traj)
         np.save(f"{output_dir}/a0.npy", self.a_traj[0])
         np.save(f"{output_dir}/a1.npy", self.a_target)
+        if self.history is not None:
+            np.save(f"{output_dir}/history.npy", self.history)
+        meta = {"path_a0": self.path_a0, "path_a1": self.path_a1, "solver_config": self.solver_config}
+        with open(f"{output_dir}/meta.json", "w") as f:
+            json.dump(meta, f, indent=2)
 
 
 if __name__ == "__main__":
