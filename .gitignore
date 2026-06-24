@@ -1,0 +1,8 @@
+*.png
+/BDD_AMD_062026
+*.npy
+*.np
+*.npz
+/.venv
+__pycache__/
+.DS_Store
