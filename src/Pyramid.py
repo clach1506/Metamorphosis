@@ -1,7 +1,7 @@
 # Coarse-to-fine resolution schedule. This is a numerical-optimization
 # choice independent of the energy formula: it speeds up convergence
-# without changing what is being minimized (book section 13.4.3 is
-# discretized identically at every level, just at a different grid size).
+# without changing what is being minimized (discretized identically at every level, just at a different grid size).
+
 import torch
 import torch.nn.functional as Fnn
 

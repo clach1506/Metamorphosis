@@ -30,6 +30,22 @@ E = sum_{t=1}^{T} |w(t,x)|^2
 this scheme (explicit residual field, shooting, Eulerian transport) kept
 only for comparison — see its module docstring for the exact differences.
 
+### Optional segmentation channel
+
+If you have a binary lesion/structure mask for each of `a0`/`a1`, pass
+`path_s0`/`path_s1` to `Metamorphosis.fit()` and a weight `lambda_seg`. The
+mask trajectory `S(t)` is fit with the exact same structure (collocation +
+the same shared `v`) as the image trajectory, adding a second data term:
+
+```
++ lambda_seg * dt^-2 * sum_{t=1}^{T} |S(t+1, x + dt*v(t,x)) - S(t,x)|^2
+```
+
+Since the mask boundary is a much cleaner geometric signal than diffuse
+intensity differences, this acts as a ground-truth geometric regularizer on
+`v` — it can pull out genuine deformation that the image term alone leaves
+near zero. Purely additive: omit `path_s0`/`path_s1` and nothing changes.
+
 ## Installation
 
 ```bash
@@ -58,6 +74,18 @@ viz.export_all("results/run1")                            # every figure + frame
 metamorphosis = Metamorphosis.load("results/run1")
 ```
 
+With a binary mask available for each input image, add `lambda_seg` and the
+mask paths to get the segmentation-regularized fit described below:
+
+```python
+metamorphosis = Metamorphosis.fit(
+    "a0.png", "a1.png",
+    path_s0="s0.png", path_s1="s1.png", lambda_seg=500.0,
+)
+viz = MetamorphosisVisualizer(metamorphosis)
+viz.plot_matching_segmentation("results/run1/fig_matching_segmentation.png")
+```
+
 See [Metamorphosis.ipynb] for a full walkthrough that exercises every piece below individually before running the solvers.
 
 ## Module reference (`src/`)
@@ -67,14 +95,14 @@ See [Metamorphosis.ipynb] for a full walkthrough that exercises every piece belo
 | `Image.py` | `Image`, `ImageOperators` | load/save a grayscale image as a float32 `[0,1]` array; resize, Gaussian smoothing, gradient |
 | `Kernel.py` | `GaussianKernel` | the RKHS kernel `K` and `K^(1/2)` (Fig. 13.1) |
 | `VelocityField.py` | `VelocityField` | control `w(t)` and `v(t) = K^(1/2) w(t)`, plus the kinetic energy |
-| `ImageTrajectory.py` | `ImageTrajectory` | the free collocation states `a(1)..a(T-1)` |
+| `ImageTrajectory.py` | `ImageTrajectory` | the free collocation states `a(1)..a(T-1)` -- generic over any single-channel field, reused for the segmentation mask trajectory `S(t)` too |
 | `Warp.py` | `SemiLagrangianWarp` | bilinear transport `a(t+1, x + dt*v(t,x))` |
-| `Energy.py` | `MetamorphosisEnergy` | formula (13.13): kinetic + data term |
+| `Energy.py` | `MetamorphosisEnergy` | formula (13.13): kinetic + data term, plus an optional `lambda_seg`-weighted segmentation term sharing the same `v` |
 | `Pyramid.py` | `ResolutionPyramid` | coarse-to-fine size schedule, resize/upsample utilities |
-| `Solver.py` | `MetamorphosisSolver` | the exact/collocation solver tying the above together |
+| `Solver.py` | `MetamorphosisSolver` | the exact/collocation solver tying the above together; takes optional `s0_full`/`s1_full` masks |
 | `SimplifiedSolver.py` | `SimplifiedMetamorphosisSolver` | the approximate shooting scheme, kept separate |
-| `Metamorphosis.py` | `Metamorphosis` | facade: `.fit()` / `.load()` / `.save()`, `deformation_magnitude()`, `residual_magnitude()` |
-| `Visualizer.py` | `MetamorphosisVisualizer` | matching/separation/trajectory plots and frame-sequence export |
+| `Metamorphosis.py` | `Metamorphosis` | facade: `.fit()` / `.load()` / `.save()`, `deformation_magnitude()`, `residual_magnitude()`; carries `s_traj`/`s_target` when fit with `path_s0`/`path_s1` |
+| `Visualizer.py` | `MetamorphosisVisualizer` | matching/separation/trajectory/loss plots, frame-sequence export, text `summary()` (incl. Dice score when segmentation is used) |
 
 All modules use flat same-directory imports (e.g. `from Kernel import
 GaussianKernel`), so callers need `src/` on `sys.path`, not a package import.

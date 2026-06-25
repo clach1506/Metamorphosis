@@ -2,6 +2,11 @@
 # trajectory a(t) together with the velocity field v(t) that transports it,
 # and the implicit residual z(t) it leaves behind. This is the object the
 # rest of the project (visualization, export) should consume.
+#
+# Optionally also carries a segmentation mask trajectory s_traj, fitted with
+# the SAME v (see Solver.py/Energy.py's lambda_seg channel) -- None if no
+# segmentation was used.
+
 import json
 import os
 
@@ -10,12 +15,15 @@ import torch
 
 from Image import Image
 from Solver import MetamorphosisSolver
+from Warp import SemiLagrangianWarp
 
 
 class Metamorphosis:
     def __init__(self, a_traj: np.ndarray, v_traj_x: np.ndarray, v_traj_y: np.ndarray,
                  z_traj: np.ndarray, a_target: np.ndarray = None, history: np.ndarray = None,
-                 path_a0: str = None, path_a1: str = None, solver_config: dict = None):
+                 path_a0: str = None, path_a1: str = None, solver_config: dict = None,
+                 s_traj: np.ndarray = None, s_target: np.ndarray = None,
+                 path_s0: str = None, path_s1: str = None):
         self.a_traj = a_traj      # (T+1, H, W) -- at whatever resolution the solver ran at,
         self.v_traj_x = v_traj_x  # (T, H, W)      not necessarily the input images' native size
         self.v_traj_y = v_traj_y  # (see solver_config["pyramid_scales"])
@@ -24,18 +32,27 @@ class Metamorphosis:
         # scheme (a(T) is anchored to it), but a genuine reconstruction error
         # may exist for other schemes (e.g. shooting), so keep it distinct.
         self.a_target = a_traj[-1] if a_target is None else a_target
-        self.history = history    # (n_iters, 4): columns (level, loss, E_kinetic, E_data)
+        self.history = history    # (n_iters, 4 or 5): (level, loss, E_kinetic, E_data[, E_seg])
         self.path_a0 = path_a0
         self.path_a1 = path_a1
         self.solver_config = solver_config or {}
 
+        self.s_traj = s_traj      # (T+1, H, W) segmentation mask trajectory, or None
+        self.s_target = (s_traj[-1] if (s_traj is not None and s_target is None) else s_target)
+        self.path_s0 = path_s0
+        self.path_s1 = path_s1
+
     @classmethod
-    def fit(cls, path_a0: str, path_a1: str, **solver_kwargs) -> "Metamorphosis":
+    def fit(cls, path_a0: str, path_a1: str, path_s0: str = None, path_s1: str = None,
+            verbose: bool = True, **solver_kwargs) -> "Metamorphosis":
         a0 = torch.tensor(Image(path_a0).array, dtype=torch.float32)
         a1 = torch.tensor(Image(path_a1).array, dtype=torch.float32)
+        use_seg = path_s0 is not None and path_s1 is not None
+        s0 = torch.tensor(Image(path_s0).array, dtype=torch.float32) if use_seg else None
+        s1 = torch.tensor(Image(path_s1).array, dtype=torch.float32) if use_seg else None
 
         solver = MetamorphosisSolver(**solver_kwargs)
-        velocity, trajectory, warp = solver.fit(a0, a1)
+        velocity, trajectory, warp, mask_trajectory = solver.fit(a0, a1, s0, s1, verbose=verbose)
 
         with torch.no_grad():
             a = trajectory.full()
@@ -47,20 +64,23 @@ class Metamorphosis:
                 v_traj_y.append(vy.clone())
                 z_traj.append(((warped_next - a[t]) / solver.dt).clone())
 
-            a_traj = a.numpy()
-            v_traj_x = torch.stack(v_traj_x).numpy()
-            v_traj_y = torch.stack(v_traj_y).numpy()
-            z_traj = torch.stack(z_traj).numpy()
+            a_traj = a.cpu().numpy()
+            v_traj_x = torch.stack(v_traj_x).cpu().numpy()
+            v_traj_y = torch.stack(v_traj_y).cpu().numpy()
+            z_traj = torch.stack(z_traj).cpu().numpy()
+            s_traj = mask_trajectory.full().cpu().numpy() if use_seg else None
+            s_target = mask_trajectory.a1.cpu().numpy() if use_seg else None
 
         solver_config = {
-            "T": solver.T, "lambda_data": solver.lambda_data,
+            "T": solver.T, "lambda_data": solver.lambda_data, "lambda_seg": solver.lambda_seg,
             "kernel_sigma_frac": solver.kernel_sigma_frac,
             "pyramid_scales": list(solver.pyramid_scales),
             "native_shape": list(a0.shape),
         }
         return cls(a_traj, v_traj_x, v_traj_y, z_traj,
-                   a_target=trajectory.a1.numpy(), history=np.array(solver.history),
-                   path_a0=path_a0, path_a1=path_a1, solver_config=solver_config)
+                   a_target=trajectory.a1.cpu().numpy(), history=np.array(solver.history),
+                   path_a0=path_a0, path_a1=path_a1, solver_config=solver_config,
+                   s_traj=s_traj, s_target=s_target, path_s0=path_s0, path_s1=path_s1)
 
     @classmethod
     def load(cls, directory: str) -> "Metamorphosis":
@@ -73,9 +93,45 @@ class Metamorphosis:
         history = np.load(history_path) if os.path.exists(history_path) else None
         meta_path = f"{directory}/meta.json"
         meta = json.load(open(meta_path)) if os.path.exists(meta_path) else {}
+
+        s_traj_path = f"{directory}/s_traj.npy"
+        s_traj = np.load(s_traj_path) if os.path.exists(s_traj_path) else None
+        s_target_path = f"{directory}/s1.npy"
+        s_target = np.load(s_target_path) if (s_traj is not None and os.path.exists(s_target_path)) else None
+
         return cls(a_traj, v_traj_x, v_traj_y, z_traj, a_target=a_target, history=history,
                    path_a0=meta.get("path_a0"), path_a1=meta.get("path_a1"),
-                   solver_config=meta.get("solver_config"))
+                   solver_config=meta.get("solver_config"),
+                   s_traj=s_traj, s_target=s_target,
+                   path_s0=meta.get("path_s0"), path_s1=meta.get("path_s1"))
+
+    def pure_deformation_segmentation_trajectory(self) -> np.ndarray:
+        # Re-transports S(0) through the SAME fitted v(t), but by pure
+        # advection (no implicit residual at all) -- unlike s_traj, whose
+        # mismatch with the warp is only penalized by lambda_seg, not
+        # forced to zero, so it's free to drift off the geometric flow to
+        # hit s1 exactly. Comparing this against s_traj/s_target answers
+        # "how much of the segmentation's change does geometry alone
+        # explain?", the same v-vs-z question the book asks of intensity.
+        #
+        # Forward semi-Lagrangian step, derived from the same approximation
+        # the energy enforces -- channel[t+1](y) = channel[t](y - dt*v(t,y)) --
+        # i.e. warp(channel[t], -dt*vx, -dt*vy) evaluated at y.
+        if self.s_traj is None:
+            raise ValueError("no segmentation data on this Metamorphosis "
+                              "(fit with path_s0/path_s1, or load a directory that has s_traj.npy)")
+        T, H, W = self.v_traj_x.shape
+        dt = 1.0 / T
+        warp = SemiLagrangianWarp(H, W)
+        s = torch.tensor(self.s_traj[0], dtype=torch.float32)
+        frames = [s]
+        with torch.no_grad():
+            for t in range(T):
+                vx = torch.tensor(self.v_traj_x[t], dtype=torch.float32)
+                vy = torch.tensor(self.v_traj_y[t], dtype=torch.float32)
+                s = warp(s, -dt * vx, -dt * vy)
+                frames.append(s)
+        return torch.stack(frames).numpy()
 
     def deformation_magnitude(self) -> np.ndarray:
         # Cumulative |v| over time: how much geometric deformation happened where.
@@ -95,7 +151,14 @@ class Metamorphosis:
         np.save(f"{output_dir}/a1.npy", self.a_target)
         if self.history is not None:
             np.save(f"{output_dir}/history.npy", self.history)
-        meta = {"path_a0": self.path_a0, "path_a1": self.path_a1, "solver_config": self.solver_config}
+        if self.s_traj is not None:
+            np.save(f"{output_dir}/s_traj.npy", self.s_traj)
+            np.save(f"{output_dir}/s0.npy", self.s_traj[0])
+            np.save(f"{output_dir}/s1.npy", self.s_target)
+        meta = {
+            "path_a0": self.path_a0, "path_a1": self.path_a1, "solver_config": self.solver_config,
+            "path_s0": self.path_s0, "path_s1": self.path_s1,
+        }
         with open(f"{output_dir}/meta.json", "w") as f:
             json.dump(meta, f, indent=2)
 
@@ -104,10 +167,16 @@ if __name__ == "__main__":
     metamorphosis = Metamorphosis.fit(
         "BDD_AMD_062026/031_FA_C_OD/preprocessed/UTF-8FAC20013.png",
         "BDD_AMD_062026/031_FA_C_OD/preprocessed/UTF-8FAC20023.png",
-        T=4, pyramid_scales=(1 / 8, 1 / 4), level_iters=(20, 10), level_lrs=(0.05, 0.02),
+        path_s0="BDD_AMD_062026/031_FA_C_OD/segmentations/frame_0009.png",
+        path_s1="BDD_AMD_062026/031_FA_C_OD/segmentations/frame_0019.png",
+        T=4, lambda_seg=50.0, pyramid_scales=(1 / 8, 1 / 4), level_iters=(20, 10), level_lrs=(0.05, 0.02),
     )
     metamorphosis.save("results_metamorphosis_sanity_check")
     print("\nshapes:", metamorphosis.a_traj.shape, metamorphosis.v_traj_x.shape, metamorphosis.z_traj.shape)
+    print("s_traj shape:", metamorphosis.s_traj.shape if metamorphosis.s_traj is not None else None)
     print("deformation_magnitude range:", metamorphosis.deformation_magnitude().min(),
           metamorphosis.deformation_magnitude().max())
+    if metamorphosis.s_traj is not None:
+        s_pure_traj = metamorphosis.pure_deformation_segmentation_trajectory()
+        print("pure-deformation s_traj shape:", s_pure_traj.shape)
     print("All sanity checks passed.")

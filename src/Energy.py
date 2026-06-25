@@ -1,18 +1,11 @@
-# The discrete metamorphosis energy, book formula (13.13):
+# The discrete metamorphosis energy, book formula (13.13), generalized to an
+# optional second "segmentation" channel sharing the SAME velocity field:
 #
 #   E = sum_{t=1}^{T} |w(t,x)|^2
-#       + lambda * dt^-2 * sum_{t=1}^{T} |a(t+1, x + dt*v(t,x)) - a(t,x)|^2
-#
-# The first term is the kinetic energy of the deformation (RKHS norm of v,
-# computed as ||w||_2^2 since v = K^(1/2) w). The second is the data term:
-# mismatch between each image and the next one, transported back by the flow.
-#
-# `lambda` (lambda_data) is the book's residual weight 1/sigma^2 in disguise:
-# writing the implicit residual as z := mismatch/dt, the data term equals
-# lambda_data * dt^-2 * (dt*z)^2 = lambda_data * z^2. So raising lambda_data
-# penalizes residual/mismatch harder and pushes more of the change onto
-# genuine deformation v instead of letting the free a(1..T-1) states drift;
-# lowering it does the opposite (favors residual).
+#       + lambda_a   * dt^-2 * sum_{t=1}^{T} |a(t+1, x+dt*v(t,x)) - a(t,x)|^2
+#       + lambda_seg * dt^-2 * sum_{t=1}^{T} |S(t+1, x+dt*v(t,x)) - S(t,x)|^2
+
+
 import torch
 
 from VelocityField import VelocityField
@@ -21,19 +14,32 @@ from Warp import SemiLagrangianWarp
 
 
 class MetamorphosisEnergy:
-    def __init__(self, dt: float, lambda_data: float):
+    def __init__(self, dt: float, lambda_data: float, lambda_seg: float = 0.0):
         self.dt = dt
         self.data_weight = lambda_data * dt ** -2
+        self.seg_weight = lambda_seg * dt ** -2
 
-    def compute(self, velocity: VelocityField, trajectory: ImageTrajectory, warp: SemiLagrangianWarp):
-        a = trajectory.full()
+    @staticmethod
+    def _mismatch_energy(velocity: VelocityField, trajectory: ImageTrajectory,
+                          warp: SemiLagrangianWarp, dt: float) -> torch.Tensor:
+        channel = trajectory.full()
         T = velocity.w_x.shape[0]
-        energy_kinetic = velocity.kinetic_energy()
-        energy_data = 0.0
+        energy = 0.0
         for t in range(T):
             vx, vy = velocity.velocity_at(t)
-            warped_next = warp(a[t + 1], self.dt * vx, self.dt * vy)
-            mismatch = warped_next - a[t]
-            energy_data = energy_data + (mismatch ** 2).sum()
+            warped_next = warp(channel[t + 1], dt * vx, dt * vy)
+            energy = energy + ((warped_next - channel[t]) ** 2).sum()
+        return energy
+
+    def compute(self, velocity: VelocityField, trajectory: ImageTrajectory, warp: SemiLagrangianWarp,
+                mask_trajectory: ImageTrajectory = None):
+        energy_kinetic = velocity.kinetic_energy()
+        energy_data = self._mismatch_energy(velocity, trajectory, warp, self.dt)
         loss = energy_kinetic + self.data_weight * energy_data
-        return loss, energy_kinetic, energy_data
+
+        energy_seg = None
+        if mask_trajectory is not None:
+            energy_seg = self._mismatch_energy(velocity, mask_trajectory, warp, self.dt)
+            loss = loss + self.seg_weight * energy_seg
+
+        return loss, energy_kinetic, energy_data, energy_seg

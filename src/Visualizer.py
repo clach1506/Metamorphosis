@@ -38,21 +38,26 @@ class MetamorphosisVisualizer:
                           f"short of 1.0, so this run (and every figure/frame below) is at "
                           f"{self.H}x{self.W}, not native resolution.")
         if m.solver_config:
-            lines.append(f"lambda_data={m.solver_config.get('lambda_data')}  "
+            seg_str = f"  lambda_seg={m.solver_config.get('lambda_seg')}" if m.s_traj is not None else ""
+            lines.append(f"lambda_data={m.solver_config.get('lambda_data')}{seg_str}  "
                           f"kernel_sigma_frac={m.solver_config.get('kernel_sigma_frac')}")
         lines.append("")
 
         if m.history is not None:
-            level, loss, e_kinetic, e_data = m.history[-1]
+            row = m.history[-1]
+            level, loss, e_kinetic, e_data = row[:4]
+            e_seg = row[4] if len(row) > 4 else None
             rms = (e_data / (self.T * self.H * self.W)) ** 0.5
             lines += [
                 "Final energy (finest level):",
                 f"  loss         = {loss:,.2f}",
                 f"  E_kinetic    = {e_kinetic:,.2f}",
-                f"  E_data       = {e_data:,.4f}",
-                f"  rms mismatch = {rms:.5f}  (~{rms * 255:.2f}/255 gray levels)",
-                "",
+                f"  E_data       = {e_data:,.4f}  (rms {rms:.5f}, ~{rms * 255:.2f}/255 gray levels)",
             ]
+            if e_seg is not None:
+                rms_seg = (e_seg / (self.T * self.H * self.W)) ** 0.5
+                lines.append(f"  E_seg        = {e_seg:,.4f}  (rms {rms_seg:.5f})")
+            lines.append("")
 
         v_total = float(m.deformation_magnitude().sum())
         z_total = float(m.residual_magnitude().sum())
@@ -74,6 +79,20 @@ class MetamorphosisVisualizer:
         if final_diff.max() == 0:
             lines.append("  (exactly 0 because a(T) is anchored to a(1) in the exact/collocation "
                           "scheme -- not a measure of fit quality; see E_data/rms above instead)")
+
+        if m.s_traj is not None:
+            dice = self._dice_score(m.s_traj[-1], m.s_target)
+            dice_pure = self._dice_score(m.pure_deformation_segmentation_trajectory()[-1], m.s_target)
+            lines += [
+                "",
+                "Segmentation matching, S(T) vs target S(1):",
+                f"  Dice score                              = {dice:.4f}",
+                f"  Dice score (pure deformation, no residual) = {dice_pure:.4f}",
+            ]
+            if dice == 1.0:
+                lines.append("  (first one trivially 1.0 -- S(T) is anchored to S(1) just like a(T)/a(1) "
+                              "above, so the pure-deformation Dice above is the only one that actually "
+                              "measures how well v alone explains the segmentation's change)")
         return "\n".join(lines)
 
     def export_summary(self, output_path: str):
@@ -108,6 +127,67 @@ class MetamorphosisVisualizer:
         plt.tight_layout()
         plt.savefig(output_path, dpi=130)
         plt.close(fig)
+
+    def plot_matching_segmentation(self, output_path: str):
+        if self.m.s_traj is None:
+            raise ValueError("no segmentation data on this Metamorphosis "
+                              "(fit with path_s0/path_s1, or load a directory that has s_traj.npy)")
+        s_final = self.m.s_traj[-1]
+        diff = s_final - self.m.s_target
+        dice = self._dice_score(s_final, self.m.s_target)
+        fig, axes = plt.subplots(1, 3, figsize=(11, 4))
+        axes[0].imshow(self.m.s_target, cmap='gray', vmin=0, vmax=1)
+        axes[0].set_title("Target S(1)")
+        axes[1].imshow(s_final, cmap='gray', vmin=0, vmax=1)
+        axes[1].set_title("Reconstructed S(T)")
+        im = axes[2].imshow(diff, cmap='RdBu_r', vmin=-1, vmax=1)
+        axes[2].set_title(f"Residual error (Dice={dice:.3f})")
+        plt.colorbar(im, ax=axes[2], fraction=0.046)
+        for ax in axes:
+            ax.axis('off')
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=130)
+        plt.close(fig)
+
+    def plot_pure_vs_fitted_segmentation(self, output_path: str):
+        # The fitted S(T) (right) is anchored to S(1) by construction (just
+        # like a(T)/a(1)), so its Dice is trivially ~1.0 -- the middle panel
+        # is the one that actually shows what v alone can do, vs. the implicit
+        # residual the fit is allowed to use to hit the target exactly.
+        if self.m.s_traj is None:
+            raise ValueError("no segmentation data on this Metamorphosis "
+                              "(fit with path_s0/path_s1, or load a directory that has s_traj.npy)")
+        s_pure_final = self.m.pure_deformation_segmentation_trajectory()[-1]
+        s_fitted_final = self.m.s_traj[-1]
+        dice_pure = self._dice_score(s_pure_final, self.m.s_target)
+        dice_fitted = self._dice_score(s_fitted_final, self.m.s_target)
+        fig, axes = plt.subplots(1, 3, figsize=(11, 4))
+        axes[0].imshow(self.m.s_target, cmap='gray', vmin=0, vmax=1)
+        axes[0].set_title("Target S(1)")
+        axes[1].imshow(s_pure_final, cmap='gray', vmin=0, vmax=1)
+        axes[1].set_title(f"Pure deformation S(T)\n(no residual, Dice={dice_pure:.3f})")
+        axes[2].imshow(s_fitted_final, cmap='gray', vmin=0, vmax=1)
+        axes[2].set_title(f"Fitted S(T)\n(with residual, Dice={dice_fitted:.3f})")
+        for ax in axes:
+            ax.axis('off')
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=130)
+        plt.close(fig)
+
+    def export_pure_deformation_segmentation_frames(self, output_dir: str):
+        if self.m.s_traj is None:
+            raise ValueError("no segmentation data on this Metamorphosis "
+                              "(fit with path_s0/path_s1, or load a directory that has s_traj.npy)")
+        os.makedirs(output_dir, exist_ok=True)
+        s_pure_traj = self.m.pure_deformation_segmentation_trajectory()
+        for t in range(self.T + 1):
+            fig, ax = plt.subplots(figsize=(6, 6))
+            ax.imshow(s_pure_traj[t], cmap='gray', vmin=0, vmax=1)
+            ax.set_title(f"Pure deformation S(t={t}/{self.T})")
+            ax.axis('off')
+            plt.tight_layout()
+            plt.savefig(f"{output_dir}/frame_{t:03d}.png", dpi=140)
+            plt.close(fig)
 
     def plot_deformation_vs_residual(self, output_path: str):
         v_map = self.m.deformation_magnitude()
@@ -285,13 +365,27 @@ class MetamorphosisVisualizer:
         self.plot_trajectory_strip(f"{output_dir}/fig_trajectory.png")
         self.plot_vector_field(f"{output_dir}/fig_vector_field.png")
         if self.m.history is not None:
-            self.plot_loss_history(self.m.history, f"{output_dir}/fig_loss.png")
+            labels = ("loss", "E_kinetic", "E_data", "E_seg") if self.m.s_traj is not None \
+                else ("loss", "E_kinetic", "E_data")
+            self.plot_loss_history(self.m.history, f"{output_dir}/fig_loss.png", labels=labels)
+        if self.m.s_traj is not None:
+            self.plot_matching_segmentation(f"{output_dir}/fig_matching_segmentation.png")
+            self.plot_pure_vs_fitted_segmentation(f"{output_dir}/fig_pure_vs_fitted_segmentation.png")
+            self.export_pure_deformation_segmentation_frames(f"{output_dir}/frames_segmentation_pure")
         self.export_trajectory_frames(f"{output_dir}/frames")
         self.export_deformation_grid_frames(f"{output_dir}/frames_deformation")
         self.export_residual_frames(f"{output_dir}/frames_residual")
         self.export_velocity_frames(f"{output_dir}/frames_velocity")
 
     # ---- helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _dice_score(pred: np.ndarray, target: np.ndarray, threshold: float = 0.5) -> float:
+        pred_bin = pred > threshold
+        target_bin = target > threshold
+        intersection = np.logical_and(pred_bin, target_bin).sum()
+        denom = pred_bin.sum() + target_bin.sum()
+        return 2.0 * intersection / denom if denom else float("nan")
 
     @staticmethod
     def _sample_spline(field: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:

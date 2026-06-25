@@ -1,8 +1,7 @@
-# The regularization kernel K of the RKHS V (book, Fig. 13.1): a Gaussian
+# The regularization kernel K of the RKHS V : a Gaussian
 # convolution turning a raw control field w into a spatially smooth velocity.
-# K^(1/2) is the Gaussian kernel of half the variance, since convolving
-# twice by a Gaussian of std s equals convolving once by std s*sqrt(2)
-# (variances add under convolution) -- so K^(1/2) needs no Fourier inversion.
+# K^(1/2) is the Gaussian kernel of half the variance
+
 import math
 import torch
 import torch.nn.functional as Fnn
@@ -26,15 +25,15 @@ class GaussianKernel:
         return self._separable_conv(field, self.sigma / math.sqrt(2.0))
 
     @staticmethod
-    def _gaussian_kernel_1d(sigma: float, ksize: int = None) -> torch.Tensor:
+    def _gaussian_kernel_1d(sigma: float, ksize: int = None, device=None) -> torch.Tensor:
         if ksize is None:
             ksize = int(6 * sigma) | 1  # odd
-        ax = torch.arange(ksize, dtype=torch.float32) - ksize // 2
+        ax = torch.arange(ksize, dtype=torch.float32, device=device) - ksize // 2
         g = torch.exp(-(ax ** 2) / (2 * sigma ** 2))
         return g / g.sum()
 
     def _separable_conv(self, field: torch.Tensor, sigma: float) -> torch.Tensor:
-        kernel_1d = self._gaussian_kernel_1d(sigma)
+        kernel_1d = self._gaussian_kernel_1d(sigma, device=field.device)
         pad = kernel_1d.shape[0] // 2
         kx = kernel_1d.view(1, 1, 1, -1)
         ky = kernel_1d.view(1, 1, -1, 1)

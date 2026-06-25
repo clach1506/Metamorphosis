@@ -1,5 +1,5 @@
-# The collocation variables of the discrete metamorphosis (book section
-# 13.4.3): intermediate images a(1)..a(T-1) are free variables optimized
+# The collocation variables of the discrete metamorphosis
+# intermediate images a(1)..a(T-1) are free variables optimized
 # jointly with the velocity field, not the output of a forward simulation
 # from a(0) ("shooting"). Endpoints a(0) and a(T) stay fixed to the input
 # and target images.
@@ -18,7 +18,7 @@ class ImageTrajectory:
     def linear_init(cls, a0: torch.Tensor, a1: torch.Tensor, T: int) -> "ImageTrajectory":
         # Neutral starting point for the optimization: linear interpolation
         # in intensity between the endpoints.
-        taus = torch.linspace(1.0 / T, (T - 1) / T, T - 1).view(-1, 1, 1)
+        taus = torch.linspace(1.0 / T, (T - 1) / T, T - 1, device=a0.device).view(-1, 1, 1)
         a_inner = (a0.unsqueeze(0) + taus * (a1 - a0).unsqueeze(0)).clone().requires_grad_(True)
         return cls(a0, a1, a_inner)
 

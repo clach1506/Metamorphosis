@@ -7,12 +7,12 @@ import torch.nn.functional as Fnn
 
 
 class SemiLagrangianWarp:
-    def __init__(self, height: int, width: int):
+    def __init__(self, height: int, width: int, device=None):
         self.height = height
         self.width = width
         self.ys, self.xs = torch.meshgrid(
-            torch.arange(height, dtype=torch.float32),
-            torch.arange(width, dtype=torch.float32),
+            torch.arange(height, dtype=torch.float32, device=device),
+            torch.arange(width, dtype=torch.float32, device=device),
             indexing='ij',
         )
 
@@ -21,6 +21,10 @@ class SemiLagrangianWarp:
         norm_x = 2.0 * (self.xs + dx) / (self.width - 1) - 1.0
         norm_y = 2.0 * (self.ys + dy) / (self.height - 1) - 1.0
         grid = torch.stack([norm_x, norm_y], dim=-1).unsqueeze(0)  # (1, H, W, 2)
+        # Border padding is unsupported on MPS -- clamping the grid to
+        # [-1, 1] up front is equivalent (no sample then lands out of
+        # bounds), so any padding mode works; use 'zeros', which MPS supports.
+        grid = grid.clamp(-1.0, 1.0)
         out = Fnn.grid_sample(image.unsqueeze(0).unsqueeze(0), grid,
-                               mode='bilinear', padding_mode='border', align_corners=True)
+                               mode='bilinear', padding_mode='zeros', align_corners=True)
         return out.squeeze(0).squeeze(0)

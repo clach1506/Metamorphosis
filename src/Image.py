@@ -3,6 +3,7 @@
 #
 # ImageOperators: transformations that take/return a raw array, so they
 # stay decoupled from Image and compose via Image.apply().
+
 import numpy as np
 from PIL import Image as PILImage
 

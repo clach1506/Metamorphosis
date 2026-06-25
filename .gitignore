@@ -8,3 +8,7 @@ __pycache__/
 .DS_Store
 *.txt
 *.json
+.env
+*.tex
+
+*.pdf
