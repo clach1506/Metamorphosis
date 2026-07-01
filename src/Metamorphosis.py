@@ -121,7 +121,12 @@ class Metamorphosis:
             raise ValueError("no segmentation data on this Metamorphosis "
                               "(fit with path_s0/path_s1, or load a directory that has s_traj.npy)")
         T, H, W = self.v_traj_x.shape
-        dt = 1.0 / T
+        # For a stitched series, solver_config["T"] holds the per-leg step count while T
+        # is N_legs*T_per_leg.  Using T directly would give 1/N_legs of the intended
+        # displacement per step.  For a single-pair run solver_config["T"] == T, so
+        # behaviour is unchanged.
+        T_per_step = (self.solver_config or {}).get("T") or T
+        dt = 1.0 / T_per_step
         warp = SemiLagrangianWarp(H, W)
         s = torch.tensor(self.s_traj[0], dtype=torch.float32)
         frames = [s]

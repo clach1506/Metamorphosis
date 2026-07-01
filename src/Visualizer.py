@@ -18,12 +18,15 @@ class MetamorphosisVisualizer:
         self.n_grid = n_grid
         self.rows_idx = np.linspace(0, self.H - 1, n_grid).round().astype(int)
         self.cols_idx = np.linspace(0, self.W - 1, n_grid).round().astype(int)
+        # For a stitched series T is N_legs*T_per_leg but each velocity was learned
+        # with dt = 1/T_per_leg.  solver_config["T"] always holds T_per_leg.
+        T_per_step = (metamorphosis.solver_config or {}).get("T") or self.T
+        self.dt = 1.0 / T_per_step
 
     # ---- text summary -------------------------------------------------------
 
     def summary(self) -> str:
         m = self.m
-        dt = 1.0 / self.T
         lines = [
             "Metamorphosis summary",
             "======================",
@@ -64,7 +67,7 @@ class MetamorphosisVisualizer:
         denom = v_total + z_total
         pct_v = 100 * v_total / denom if denom else float("nan")
         pct_z = 100 - pct_v if denom else float("nan")
-        disp = np.sqrt((m.v_traj_x.sum(0) * dt) ** 2 + (m.v_traj_y.sum(0) * dt) ** 2)
+        disp = np.sqrt((m.v_traj_x.sum(0) * self.dt) ** 2 + (m.v_traj_y.sum(0) * self.dt) ** 2)
         final_diff = np.abs(m.a_traj[-1] - m.a_target)
         lines += [
             "Geometric deformation vs. residual:",
@@ -174,6 +177,20 @@ class MetamorphosisVisualizer:
         plt.savefig(output_path, dpi=130)
         plt.close(fig)
 
+    def export_segmentation_frames(self, output_dir: str):
+        if self.m.s_traj is None:
+            raise ValueError("no segmentation data on this Metamorphosis "
+                              "(fit with path_s0/path_s1, or load a directory that has s_traj.npy)")
+        os.makedirs(output_dir, exist_ok=True)
+        for t in range(self.T + 1):
+            fig, ax = plt.subplots(figsize=(6, 6))
+            ax.imshow(self.m.s_traj[t], cmap='gray', vmin=0, vmax=1)
+            ax.set_title(f"S(t={t}/{self.T})")
+            ax.axis('off')
+            plt.tight_layout()
+            plt.savefig(f"{output_dir}/frame_{t:03d}.png", dpi=140)
+            plt.close(fig)
+
     def export_pure_deformation_segmentation_frames(self, output_dir: str):
         if self.m.s_traj is None:
             raise ValueError("no segmentation data on this Metamorphosis "
@@ -241,21 +258,53 @@ class MetamorphosisVisualizer:
         plt.savefig(output_path, dpi=130)
         plt.close(fig)
 
-    def plot_vector_field(self, output_path: str, step: int = None):
+    def plot_displacement_field(self, output_path: str, step: int = None):
+        # Net displacement = integral of v(t) dt over the trajectory, i.e.
+        # sum_t v(t)*dt -- a position offset (px), NOT a velocity. Matches
+        # the `disp` quantity in summary(); without the dt factor this would
+        # be T times too large and isn't a meaningful physical quantity.
         step = step or max(1, min(self.H, self.W) // 16)
-        vx_net = self.m.v_traj_x.sum(axis=0)
-        vy_net = self.m.v_traj_y.sum(axis=0)
+        dx_net = self.m.v_traj_x.sum(axis=0) * self.dt
+        dy_net = self.m.v_traj_y.sum(axis=0) * self.dt
         Y, X = np.mgrid[0:self.H, 0:self.W]
 
         fig, ax = plt.subplots(figsize=(6, 6 * self.H / self.W))
         ax.imshow(self.m.a_traj[0], cmap='gray', vmin=0, vmax=1)
         q = ax.quiver(X[::step, ::step], Y[::step, ::step],
-                      vx_net[::step, ::step], -vy_net[::step, ::step],
+                      dx_net[::step, ::step], -dy_net[::step, ::step],
                       color='red', width=0.004)
-        ref = np.percentile(np.sqrt(vx_net ** 2 + vy_net ** 2), 99)
+        ref = np.percentile(np.sqrt(dx_net ** 2 + dy_net ** 2), 99)
         ax.quiverkey(q, X=0.83, Y=1.04, U=ref, label=f'{ref:.3f} px (net)', labelpos='E',
                      fontproperties={'size': 8})
-        ax.set_title("Net deformation field v(x), cumulated over the trajectory")
+        ax.set_title("Net displacement field (Σ v dt), cumulated over the trajectory")
+        ax.axis('off')
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=130)
+        plt.close(fig)
+
+    def plot_velocity_field(self, output_path: str, t: int = None, step: int = None):
+        # The actual instantaneous velocity field v(t,x) at a single t --
+        # unlike plot_displacement_field this is genuinely v (px/step) at
+        # one moment, not a quantity collapsed across the trajectory.
+        # (Time-averaging v(t,x) over t would NOT give a "real" velocity
+        # distinct from the displacement field: mean_t v(t,x) ==
+        # sum_t v(t,x) * dt since dt = 1/T, i.e. the exact same field
+        # plot_displacement_field already shows.)
+        t = self.T // 2 if t is None else t
+        step = step or max(1, min(self.H, self.W) // 16)
+        vx = self.m.v_traj_x[t]
+        vy = self.m.v_traj_y[t]
+        Y, X = np.mgrid[0:self.H, 0:self.W]
+
+        fig, ax = plt.subplots(figsize=(6, 6 * self.H / self.W))
+        ax.imshow(self.m.a_traj[t], cmap='gray', vmin=0, vmax=1)
+        q = ax.quiver(X[::step, ::step], Y[::step, ::step],
+                      vx[::step, ::step], -vy[::step, ::step],
+                      color='cyan', width=0.004)
+        ref = np.percentile(np.sqrt(vx ** 2 + vy ** 2), 99)
+        ax.quiverkey(q, X=0.83, Y=1.04, U=ref, label=f'{ref:.3f} px/step', labelpos='E',
+                     fontproperties={'size': 8})
+        ax.set_title(f"Velocity field v(t={t}, x), instantaneous (not cumulated)")
         ax.axis('off')
         plt.tight_layout()
         plt.savefig(output_path, dpi=130)
@@ -288,7 +337,6 @@ class MetamorphosisVisualizer:
         cols_idx = np.linspace(0, self.W - 1, n_grid).round().astype(int)
 
         os.makedirs(output_dir, exist_ok=True)
-        dt = 1.0 / self.T
         yy, xx = np.meshgrid(np.arange(self.H, dtype=np.float64),
                               np.arange(self.W, dtype=np.float64), indexing='ij')
         phi_x, phi_y = xx.copy(), yy.copy()
@@ -296,8 +344,8 @@ class MetamorphosisVisualizer:
         for t in range(self.T):
             vx_here = self._sample_spline(self.m.v_traj_x[t], phi_x, phi_y)
             vy_here = self._sample_spline(self.m.v_traj_y[t], phi_x, phi_y)
-            phi_x = phi_x + dt * vx_here
-            phi_y = phi_y + dt * vy_here
+            phi_x = phi_x + self.dt * vx_here
+            phi_y = phi_y + self.dt * vy_here
             phis_x.append(phi_x.copy())
             phis_y.append(phi_y.copy())
 
@@ -363,7 +411,8 @@ class MetamorphosisVisualizer:
         self.plot_matching(f"{output_dir}/fig_matching.png")
         self.plot_deformation_vs_residual(f"{output_dir}/fig_v_vs_z.png")
         self.plot_trajectory_strip(f"{output_dir}/fig_trajectory.png")
-        self.plot_vector_field(f"{output_dir}/fig_vector_field.png")
+        self.plot_displacement_field(f"{output_dir}/fig_displacement_field.png")
+        self.plot_velocity_field(f"{output_dir}/fig_velocity_field.png")
         if self.m.history is not None:
             labels = ("loss", "E_kinetic", "E_data", "E_seg") if self.m.s_traj is not None \
                 else ("loss", "E_kinetic", "E_data")
@@ -371,6 +420,7 @@ class MetamorphosisVisualizer:
         if self.m.s_traj is not None:
             self.plot_matching_segmentation(f"{output_dir}/fig_matching_segmentation.png")
             self.plot_pure_vs_fitted_segmentation(f"{output_dir}/fig_pure_vs_fitted_segmentation.png")
+            self.export_segmentation_frames(f"{output_dir}/frames_segmentation")
             self.export_pure_deformation_segmentation_frames(f"{output_dir}/frames_segmentation_pure")
         self.export_trajectory_frames(f"{output_dir}/frames")
         self.export_deformation_grid_frames(f"{output_dir}/frames_deformation")

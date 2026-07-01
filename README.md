@@ -46,6 +46,25 @@ intensity differences, this acts as a ground-truth geometric regularizer on
 `v` — it can pull out genuine deformation that the image term alone leaves
 near zero. Purely additive: omit `path_s0`/`path_s1` and nothing changes.
 
+### Whole series (more than 2 images)
+
+A longitudinal series has more than one timepoint (`BDD_AMD_062026/031_FA_C_OD/`
+alone has 22). `MetamorphosisSeries` chains the pairwise model above across
+every consecutive pair ("leg") `I_n -> I_{n+1}` in the series and minimizes
+the sum of their energies:
+
+```
+sum_{n=1}^{N} E_n(v^n, z^n)
+```
+
+where `E_n` is exactly the single-pair energy above, evaluated on leg `n`.
+There is no term coupling different legs, so this sum is minimized exactly
+by minimizing each leg independently — `MetamorphosisSeries` is an
+orchestration layer around the existing `Metamorphosis.fit`, not a new
+numerical scheme. `MetamorphosisSeriesVisualizer` stitches the per-leg
+trajectories into one continuous sequence and reuses every
+`MetamorphosisVisualizer` plot on it.
+
 ## Installation
 
 ```bash
@@ -86,6 +105,28 @@ viz = MetamorphosisVisualizer(metamorphosis)
 viz.plot_matching_segmentation("results/run1/fig_matching_segmentation.png")
 ```
 
+For a whole series of more than 2 images (chained pairwise, masks optional,
+same as above):
+
+```python
+from MetamorphosisSeries import MetamorphosisSeries
+from SeriesVisualizer import MetamorphosisSeriesVisualizer
+
+series = MetamorphosisSeries.fit(
+    ["frame_00.png", "frame_01.png", "frame_02.png", "frame_03.png"],   # N+1 frames -> N legs
+    mask_paths=["mask_00.png", "mask_01.png", "mask_02.png", "mask_03.png"],
+    lambda_seg=500.0,
+)
+series.save("results/series1")                            # one subdir (leg_000/, leg_001/, ...) per leg
+
+viz = MetamorphosisSeriesVisualizer(series)
+print(viz.summary())                                       # total energy across all legs + per-leg detail
+viz.export_all("results/series1")                           # series-level figures + every per-leg figure
+
+# Re-load a previous run without re-solving:
+series = MetamorphosisSeries.load("results/series1")
+```
+
 See [Metamorphosis.ipynb] for a full walkthrough that exercises every piece below individually before running the solvers.
 
 ## Module reference (`src/`)
@@ -103,6 +144,8 @@ See [Metamorphosis.ipynb] for a full walkthrough that exercises every piece belo
 | `SimplifiedSolver.py` | `SimplifiedMetamorphosisSolver` | the approximate shooting scheme, kept separate |
 | `Metamorphosis.py` | `Metamorphosis` | facade: `.fit()` / `.load()` / `.save()`, `deformation_magnitude()`, `residual_magnitude()`; carries `s_traj`/`s_target` when fit with `path_s0`/`path_s1` |
 | `Visualizer.py` | `MetamorphosisVisualizer` | matching/separation/trajectory/loss plots, frame-sequence export, text `summary()` (incl. Dice score when segmentation is used) |
+| `MetamorphosisSeries.py` | `MetamorphosisSeries` | chains `Metamorphosis.fit` across every consecutive pair in a series; stitches per-leg trajectories (`full_a_traj()`/`full_v_traj()`/`full_z_traj()`/`full_s_traj()`), sums per-leg energies (`total_energy()`), `.save()`/`.load()` (one subdir per leg) |
+| `SeriesVisualizer.py` | `MetamorphosisSeriesVisualizer` | wraps a `MetamorphosisSeries` as a single stitched `Metamorphosis` and reuses every `MetamorphosisVisualizer` plot on it; adds a per-original-frame strip and a per-leg energy breakdown |
 
 All modules use flat same-directory imports (e.g. `from Kernel import
 GaussianKernel`), so callers need `src/` on `sys.path`, not a package import.
