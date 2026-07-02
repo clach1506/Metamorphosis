@@ -26,10 +26,6 @@ E = sum_{t=1}^{T} |w(t,x)|^2
   not produced by forward-simulating from `a(0)` (shooting).
 - Optimized coarse-to-fine over an image pyramid for speed.
 
-`src/SimplifiedSolver.py` implements a deliberately approximate variant of
-this scheme (explicit residual field, shooting, Eulerian transport) kept
-only for comparison — see its module docstring for the exact differences.
-
 ### Optional segmentation channel
 
 If you have a binary lesion/structure mask for each of `a0`/`a1`, pass
@@ -79,8 +75,8 @@ pip install -r requirements.txt
 import sys
 sys.path.insert(0, "src")
 
-from Metamorphosis import Metamorphosis
-from Visualizer import MetamorphosisVisualizer
+from forward.Metamorphosis import Metamorphosis
+from forward.Visualizer import MetamorphosisVisualizer
 
 metamorphosis = Metamorphosis.fit("a0.png", "a1.png")   # runs MetamorphosisSolver
 metamorphosis.save("results/run1")                       # a_traj/v_traj_x/v_traj_y/z_traj/a0/a1
@@ -109,8 +105,8 @@ For a whole series of more than 2 images (chained pairwise, masks optional,
 same as above):
 
 ```python
-from MetamorphosisSeries import MetamorphosisSeries
-from SeriesVisualizer import MetamorphosisSeriesVisualizer
+from forward.MetamorphosisSeries import MetamorphosisSeries
+from forward.SeriesVisualizer import MetamorphosisSeriesVisualizer
 
 series = MetamorphosisSeries.fit(
     ["frame_00.png", "frame_01.png", "frame_02.png", "frame_03.png"],   # N+1 frames -> N legs
@@ -133,22 +129,24 @@ See [Metamorphosis.ipynb] for a full walkthrough that exercises every piece belo
 
 | File | Class | Role |
 |---|---|---|
-| `Image.py` | `Image`, `ImageOperators` | load/save a grayscale image as a float32 `[0,1]` array; resize, Gaussian smoothing, gradient |
-| `Kernel.py` | `GaussianKernel` | the RKHS kernel `K` and `K^(1/2)` (Fig. 13.1) |
-| `VelocityField.py` | `VelocityField` | control `w(t)` and `v(t) = K^(1/2) w(t)`, plus the kinetic energy |
-| `ImageTrajectory.py` | `ImageTrajectory` | the free collocation states `a(1)..a(T-1)` -- generic over any single-channel field, reused for the segmentation mask trajectory `S(t)` too |
-| `Warp.py` | `SemiLagrangianWarp` | bilinear transport `a(t+1, x + dt*v(t,x))` |
-| `Energy.py` | `MetamorphosisEnergy` | formula (13.13): kinetic + data term, plus an optional `lambda_seg`-weighted segmentation term sharing the same `v` |
-| `Pyramid.py` | `ResolutionPyramid` | coarse-to-fine size schedule, resize/upsample utilities |
-| `Solver.py` | `MetamorphosisSolver` | the exact/collocation solver tying the above together; takes optional `s0_full`/`s1_full` masks |
-| `SimplifiedSolver.py` | `SimplifiedMetamorphosisSolver` | the approximate shooting scheme, kept separate |
-| `Metamorphosis.py` | `Metamorphosis` | facade: `.fit()` / `.load()` / `.save()`, `deformation_magnitude()`, `residual_magnitude()`; carries `s_traj`/`s_target` when fit with `path_s0`/`path_s1` |
-| `Visualizer.py` | `MetamorphosisVisualizer` | matching/separation/trajectory/loss plots, frame-sequence export, text `summary()` (incl. Dice score when segmentation is used) |
-| `MetamorphosisSeries.py` | `MetamorphosisSeries` | chains `Metamorphosis.fit` across every consecutive pair in a series; stitches per-leg trajectories (`full_a_traj()`/`full_v_traj()`/`full_z_traj()`/`full_s_traj()`), sums per-leg energies (`total_energy()`), `.save()`/`.load()` (one subdir per leg) |
-| `SeriesVisualizer.py` | `MetamorphosisSeriesVisualizer` | wraps a `MetamorphosisSeries` as a single stitched `Metamorphosis` and reuses every `MetamorphosisVisualizer` plot on it; adds a per-original-frame strip and a per-leg energy breakdown |
+| `core/Image.py` | `Image`, `ImageOperators` | load/save a grayscale image as a float32 `[0,1]` array; resize, Gaussian smoothing, gradient |
+| `core/Kernel.py` | `GaussianKernel` | the RKHS kernel `K` and `K^(1/2)` (Fig. 13.1) |
+| `core/VelocityField.py` | `VelocityField` | control `w(t)` and `v(t) = K^(1/2) w(t)`, plus the kinetic energy |
+| `core/ImageTrajectory.py` | `ImageTrajectory` | the free collocation states `a(1)..a(T-1)` -- generic over any single-channel field, reused for the segmentation mask trajectory `S(t)` too |
+| `core/Warp.py` | `SemiLagrangianWarp` | bilinear transport `a(t+1, x + dt*v(t,x))` |
+| `forward/Energy.py` | `MetamorphosisEnergy` | formula (13.13): kinetic + data term, plus an optional `lambda_seg`-weighted segmentation term sharing the same `v` |
+| `core/Pyramid.py` | `ResolutionPyramid` | coarse-to-fine size schedule, resize/upsample utilities |
+| `forward/Solver.py` | `MetamorphosisSolver` | the exact/collocation solver tying the above together; takes optional `s0_full`/`s1_full` masks |
+| `forward/SimplifiedSolver.py` | `SimplifiedMetamorphosisSolver` | the approximate shooting scheme, kept separate |
+| `forward/Metamorphosis.py` | `Metamorphosis` | facade: `.fit()` / `.load()` / `.save()`, `deformation_magnitude()`, `residual_magnitude()`; carries `s_traj`/`s_target` when fit with `path_s0`/`path_s1` |
+| `forward/Visualizer.py` | `MetamorphosisVisualizer` | matching/separation/trajectory/loss plots, frame-sequence export, text `summary()` (incl. Dice score when segmentation is used) |
+| `forward/MetamorphosisSeries.py` | `MetamorphosisSeries` | chains `Metamorphosis.fit` across every consecutive pair in a series; stitches per-leg trajectories (`full_a_traj()`/`full_v_traj()`/`full_z_traj()`/`full_s_traj()`), sums per-leg energies (`total_energy()`), `.save()`/`.load()` (one subdir per leg) |
+| `forward/SeriesVisualizer.py` | `MetamorphosisSeriesVisualizer` | wraps a `MetamorphosisSeries` as a single stitched `Metamorphosis` and reuses every `MetamorphosisVisualizer` plot on it; adds a per-original-frame strip and a per-leg energy breakdown |
 
-All modules use flat same-directory imports (e.g. `from Kernel import
-GaussianKernel`), so callers need `src/` on `sys.path`, not a package import.
+Core building blocks live in `src/core/`; the forward metamorphosis solver,
+its facade, and visualizers live in `src/forward/`. Callers need `src/` on
+`sys.path` and import by subdirectory, e.g. `from core.Kernel import
+GaussianKernel` or `from forward.Metamorphosis import Metamorphosis`.
 
 ## Data
 

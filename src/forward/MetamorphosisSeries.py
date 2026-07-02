@@ -13,36 +13,55 @@ import os
 
 import numpy as np
 
-from Metamorphosis import Metamorphosis
+from forward.Metamorphosis import Metamorphosis
 
 
 class MetamorphosisSeries:
-    def __init__(self, legs: list, image_paths: list, mask_paths: list = None, solver_config: dict = None):
-        self.legs = legs                  # [Metamorphosis], one per consecutive pair, len N
-        self.image_paths = image_paths    # [str], len N+1
-        self.mask_paths = mask_paths      # [str] or None, len N+1
+    def __init__(
+        self,
+        legs: list,
+        image_paths: list,
+        mask_paths: list = None,
+        solver_config: dict = None,
+    ):
+        self.legs = legs  # [Metamorphosis], one per consecutive pair, len N
+        self.image_paths = image_paths  # [str], len N+1
+        self.mask_paths = mask_paths  # [str] or None, len N+1
         self.solver_config = solver_config or {}
 
     @classmethod
-    def fit(cls, image_paths: list, mask_paths: list = None, verbose: bool = True,
-            **solver_kwargs) -> "MetamorphosisSeries":
+    def fit(
+        cls,
+        image_paths: list,
+        mask_paths: list = None,
+        verbose: bool = True,
+        **solver_kwargs,
+    ) -> "MetamorphosisSeries":
         if len(image_paths) < 2:
-            raise ValueError(f"need at least 2 images to form a series, got {len(image_paths)}")
+            raise ValueError(
+                f"need at least 2 images to form a series, got {len(image_paths)}"
+            )
         use_seg = mask_paths is not None
         if use_seg and len(mask_paths) != len(image_paths):
-            raise ValueError(f"mask_paths ({len(mask_paths)}) must match image_paths ({len(image_paths)})")
+            raise ValueError(
+                f"mask_paths ({len(mask_paths)}) must match image_paths ({len(image_paths)})"
+            )
 
         n_legs = len(image_paths) - 1
         legs = []
         for n in range(n_legs):
             if verbose:
-                print(f"\n=== Leg {n + 1}/{n_legs}: "
-                      f"{os.path.basename(image_paths[n])} -> {os.path.basename(image_paths[n + 1])} ===")
+                print(
+                    f"\n=== Leg {n + 1}/{n_legs}: "
+                    f"{os.path.basename(image_paths[n])} -> {os.path.basename(image_paths[n + 1])} ==="
+                )
             leg = Metamorphosis.fit(
-                image_paths[n], image_paths[n + 1],
+                image_paths[n],
+                image_paths[n + 1],
                 path_s0=mask_paths[n] if use_seg else None,
                 path_s1=mask_paths[n + 1] if use_seg else None,
-                verbose=verbose, **solver_kwargs,
+                verbose=verbose,
+                **solver_kwargs,
             )
             legs.append(leg)
 
@@ -51,17 +70,22 @@ class MetamorphosisSeries:
 
     @classmethod
     def load(cls, directory: str) -> "MetamorphosisSeries":
-        meta = json.load(open(f"{directory}/meta.json"))
+        with open(f"{directory}/meta.json") as f:
+            meta = json.load(f)
         n_legs = meta["n_legs"]
         legs = [Metamorphosis.load(f"{directory}/leg_{n:03d}") for n in range(n_legs)]
-        return cls(legs, meta["image_paths"], meta.get("mask_paths"), meta.get("solver_config"))
+        return cls(
+            legs, meta["image_paths"], meta.get("mask_paths"), meta.get("solver_config")
+        )
 
     def save(self, output_dir: str):
         os.makedirs(output_dir, exist_ok=True)
         for n, leg in enumerate(self.legs):
             leg.save(f"{output_dir}/leg_{n:03d}")
         meta = {
-            "n_legs": len(self.legs), "image_paths": self.image_paths, "mask_paths": self.mask_paths,
+            "n_legs": len(self.legs),
+            "image_paths": self.image_paths,
+            "mask_paths": self.mask_paths,
             "solver_config": self.solver_config,
         }
         with open(f"{output_dir}/meta.json", "w") as f:
@@ -72,7 +96,9 @@ class MetamorphosisSeries:
     # shared boundary frame is dropped from every leg but the last.
 
     def full_a_traj(self) -> np.ndarray:
-        return np.concatenate([leg.a_traj[:-1] for leg in self.legs[:-1]] + [self.legs[-1].a_traj], axis=0)
+        return np.concatenate(
+            [leg.a_traj[:-1] for leg in self.legs[:-1]] + [self.legs[-1].a_traj], axis=0
+        )
 
     def full_v_traj(self):
         v_x = np.concatenate([leg.v_traj_x for leg in self.legs], axis=0)
@@ -84,8 +110,12 @@ class MetamorphosisSeries:
 
     def full_s_traj(self) -> np.ndarray:
         if self.legs[0].s_traj is None:
-            raise ValueError("no segmentation data on this series (fit with mask_paths)")
-        return np.concatenate([leg.s_traj[:-1] for leg in self.legs[:-1]] + [self.legs[-1].s_traj], axis=0)
+            raise ValueError(
+                "no segmentation data on this series (fit with mask_paths)"
+            )
+        return np.concatenate(
+            [leg.s_traj[:-1] for leg in self.legs[:-1]] + [self.legs[-1].s_traj], axis=0
+        )
 
     # ---- aggregate energies: sum_{n=1}^{N} E_n, the quantity the series as
     # a whole minimizes (each term taken from that leg's finest-level history).
@@ -95,6 +125,8 @@ class MetamorphosisSeries:
         totals = {c: 0.0 for c in cols}
         any_seg = False
         for leg in self.legs:
+            if leg.history is None or len(leg.history) == 0:
+                continue
             row = leg.history[-1]
             for i, c in enumerate(cols):
                 if i + 1 < len(row):
@@ -119,9 +151,14 @@ class MetamorphosisSeries:
         use_seg = self.legs[0].s_traj is not None
         v_x, v_y = self.full_v_traj()
         return Metamorphosis(
-            self.full_a_traj(), v_x, v_y, self.full_z_traj(),
-            a_target=self.legs[-1].a_target, history=self._stitched_history(),
-            path_a0=self.image_paths[0], path_a1=self.image_paths[-1],
+            self.full_a_traj(),
+            v_x,
+            v_y,
+            self.full_z_traj(),
+            a_target=self.legs[-1].a_target,
+            history=self._stitched_history(),
+            path_a0=self.image_paths[0],
+            path_a1=self.image_paths[-1],
             solver_config={**self.solver_config, "n_legs": len(self.legs)},
             s_traj=self.full_s_traj() if use_seg else None,
             s_target=self.legs[-1].s_target if use_seg else None,
@@ -139,28 +176,3 @@ class MetamorphosisSeries:
             h[:, 0] = n
             rows.append(h)
         return np.concatenate(rows, axis=0)
-
-
-if __name__ == "__main__":
-    import glob
-
-    image_paths = sorted(p for p in glob.glob("BDD_AMD_062026/031_FA_C_OD/preprocessed/*.png")
-                          if "_processed" not in p)
-    mask_paths = sorted(glob.glob("BDD_AMD_062026/031_FA_C_OD/segmentations/*.png"))
-    series = MetamorphosisSeries.fit(
-        image_paths, mask_paths, lambda_data=200.0, lambda_seg=500.0,
-        T=4, pyramid_scales=(1 / 8, 1 / 4), level_iters=(20, 10), level_lrs=(0.05, 0.02),
-        verbose=False,
-    )
-    series.save("results_metamorphosis_series_sanity_check")
-    print("\nn_legs:", len(series.legs))
-    print("full_a_traj shape:", series.full_a_traj().shape)
-    print("total_energy:", series.total_energy())
-
-    reloaded = MetamorphosisSeries.load("results_metamorphosis_series_sanity_check")
-    assert len(reloaded.legs) == len(series.legs)
-    assert reloaded.full_a_traj().shape == series.full_a_traj().shape
-
-    merged = series.as_metamorphosis()
-    print("as_metamorphosis a_traj shape:", merged.a_traj.shape, "history shape:", merged.history.shape)
-    print("All sanity checks passed.")

@@ -1,4 +1,5 @@
 *.png
+!tests/fixtures/**/*.png
 /BDD_AMD_062026
 *.npy
 *.np
@@ -7,9 +8,17 @@
 __pycache__/
 .DS_Store
 *.txt
+!requirements.txt
 *.json
+!**/meta.json
+!**/summary.txt
 .env
 *.tex
 
 *.pdf
 *.gif
+
+*_quality.ipynb
+notebook_outputs_seg/
+notebook_outputs_series/
+.ipynb_checkpoints/

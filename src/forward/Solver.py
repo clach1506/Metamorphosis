@@ -9,35 +9,48 @@
 import os
 import torch
 
-from Kernel import GaussianKernel
-from VelocityField import VelocityField
-from ImageTrajectory import ImageTrajectory
-from Warp import SemiLagrangianWarp
-from Energy import MetamorphosisEnergy
-from Pyramid import ResolutionPyramid
-from Convergence import ConvergenceTracker
+from core.Kernel import GaussianKernel
+from core.VelocityField import VelocityField
+from core.ImageTrajectory import ImageTrajectory
+from core.Warp import SemiLagrangianWarp
+from forward.Energy import MetamorphosisEnergy
+from core.Pyramid import ResolutionPyramid
+from forward.Convergence import make_convergence_tracker
 
 
 class MetamorphosisSolver:
-    def __init__(self, T=10, lambda_data=20.0, lambda_seg=0.0, kernel_sigma_frac=0.03,
-                 pyramid_scales=(1 / 8, 1 / 4, 1 / 2, 1.0),
-                 level_iters=(400, 300, 250, 300),
-                 level_lrs=(0.01, 0.008, 0.005, 0.005),
-                 convergence_tol=1e-4, convergence_patience=30, convergence_min_iters=30,
-                 device="cpu"):
+    def __init__(
+        self,
+        T=10,
+        lambda_data=20.0,
+        lambda_seg=0.0,
+        kernel_sigma_frac=0.03,
+        pyramid_scales=(1 / 8, 1 / 4, 1 / 2, 1.0),
+        level_iters=(400, 300, 250, 300),
+        level_lrs=(0.01, 0.008, 0.005, 0.005),
+        convergence_tol=1e-4,
+        convergence_patience=30,
+        convergence_min_iters=30,
+        device="cpu",
+    ):
         self.T = T
         self.dt = 1.0 / T
         self.lambda_data = lambda_data
         self.lambda_seg = lambda_seg  # 0.0 = segmentation channel disabled
         self.kernel_sigma_frac = kernel_sigma_frac
         self.pyramid_scales = pyramid_scales
-        self.level_iters = level_iters  # per-level iteration cap; may stop earlier on convergence
+        self.level_iters = (
+            level_iters  # per-level iteration cap; may stop earlier on convergence
+        )
         self.level_lrs = level_lrs
         self.convergence_tol = convergence_tol
         self.convergence_patience = convergence_patience
         self.convergence_min_iters = convergence_min_iters
         self.device = torch.device(device)
-        if self.device.type == "mps" and os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") != "1":
+        if (
+            self.device.type == "mps"
+            and os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") != "1"
+        ):
             raise RuntimeError(
                 "device='mps' needs PYTORCH_ENABLE_MPS_FALLBACK=1 set in the shell "
                 "BEFORE starting this process (e.g. `PYTORCH_ENABLE_MPS_FALLBACK=1 "
@@ -47,14 +60,22 @@ class MetamorphosisSolver:
             )
         self.history = []
 
-    def fit(self, a0_full: torch.Tensor, a1_full: torch.Tensor,
-            s0_full: torch.Tensor = None, s1_full: torch.Tensor = None, verbose: bool = True):
+    def fit(
+        self,
+        a0_full: torch.Tensor,
+        a1_full: torch.Tensor,
+        s0_full: torch.Tensor = None,
+        s1_full: torch.Tensor = None,
+        verbose: bool = True,
+    ):
         use_seg = s0_full is not None and s1_full is not None
         a0_full, a1_full = a0_full.to(self.device), a1_full.to(self.device)
         if use_seg:
             s0_full, s1_full = s0_full.to(self.device), s1_full.to(self.device)
         H0, W0 = a0_full.shape
-        pyramid = ResolutionPyramid(H0, W0, self.pyramid_scales, self.level_iters, self.level_lrs)
+        pyramid = ResolutionPyramid(
+            H0, W0, self.pyramid_scales, self.level_iters, self.level_lrs
+        )
         energy_fn = MetamorphosisEnergy(self.dt, self.lambda_data, self.lambda_seg)
 
         velocity = trajectory = mask_trajectory = warp = None
@@ -86,13 +107,21 @@ class MetamorphosisSolver:
             optimizer = torch.optim.Adam(params, lr=lr)
 
             if verbose:
-                print(f"\n--- Level {level + 1}/{len(pyramid)} ({h}x{w}, "
-                      f"sigma_K={kernel.sigma:.2f}, lr={lr}, max {n_iter} iters) ---")
-            tracker = ConvergenceTracker(self.convergence_tol, self.convergence_patience, self.convergence_min_iters)
+                print(
+                    f"\n--- Level {level + 1}/{len(pyramid)} ({h}x{w}, "
+                    f"sigma_K={kernel.sigma:.2f}, lr={lr}, max {n_iter} iters) ---"
+                )
+            tracker = make_convergence_tracker(
+                self.convergence_tol,
+                self.convergence_patience,
+                self.convergence_min_iters,
+            )
             n_data_elems = self.T * h * w
             for it in range(n_iter):
                 optimizer.zero_grad()
-                loss, e_kinetic, e_data, e_seg = energy_fn.compute(velocity, trajectory, warp, mask_trajectory)
+                loss, e_kinetic, e_data, e_seg = energy_fn.compute(
+                    velocity, trajectory, warp, mask_trajectory
+                )
                 loss.backward()
                 optimizer.step()
                 loss_val = loss.item()
@@ -106,13 +135,17 @@ class MetamorphosisSolver:
                 rms_data = (e_data_val / n_data_elems) ** 0.5
                 seg_str = f"  E_seg={e_seg_val:12.6f}" if use_seg else ""
                 if verbose and (it % 100 == 0 or it == n_iter - 1):
-                    print(f"  iter {it:4d}  loss={loss_val:12.4f}  "
-                          f"E_kin={e_kinetic.item():10.4f}  E_data={e_data_val:12.6f}{seg_str}  "
-                          f"rms={rms_data:.5f} (~{rms_data * 255:.2f}/255)")
-                if tracker.step(loss_val):
+                    print(
+                        f"  iter {it:4d}  loss={loss_val:12.4f}  "
+                        f"E_kin={e_kinetic.item():10.4f}  E_data={e_data_val:12.6f}{seg_str}  "
+                        f"rms={rms_data:.5f} (~{rms_data * 255:.2f}/255)"
+                    )
+                if tracker(loss_val):
                     if verbose:
-                        print(f"  converged at iter {it} (no improvement for {self.convergence_patience} iters)  "
-                              f"rms={rms_data:.5f} (~{rms_data * 255:.2f}/255)")
+                        print(
+                            f"  converged at iter {it} (no improvement for {self.convergence_patience} iters)  "
+                            f"rms={rms_data:.5f} (~{rms_data * 255:.2f}/255)"
+                        )
                     break
 
         return velocity, trajectory, warp, mask_trajectory

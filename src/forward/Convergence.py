@@ -7,22 +7,25 @@
 # un-trained iteration-0 loss can look like a (misleading) early optimum
 # that the optimizer must temporarily move away from before real progress
 # shows up. No stop is allowed before `min_iters` steps have run.
-class ConvergenceTracker:
-    def __init__(self, tol: float = 1e-4, patience: int = 30, min_iters: int = 30):
-        self.tol = tol
-        self.patience = patience
-        self.min_iters = min_iters
-        self.best_loss = float("inf")
-        self.stale_iters = 0
-        self.iters_seen = 0
 
-    def step(self, loss: float) -> bool:
-        self.iters_seen += 1
-        if self.iters_seen <= self.min_iters:
+
+def make_convergence_tracker(
+    tol: float = 1e-4, patience: int = 30, min_iters: int = 30
+):
+    best_loss = float("inf")
+    stale_iters = 0
+    iters_seen = 0
+
+    def step(loss: float) -> bool:
+        nonlocal best_loss, stale_iters, iters_seen
+        iters_seen += 1
+        if iters_seen <= min_iters:
             return False  # warmup: too early to trust as a convergence baseline
-        if loss < self.best_loss * (1.0 - self.tol):
-            self.best_loss = loss
-            self.stale_iters = 0
+        if loss < best_loss * (1.0 - tol):
+            best_loss = loss
+            stale_iters = 0
         else:
-            self.stale_iters += 1
-        return self.stale_iters >= self.patience
+            stale_iters += 1
+        return stale_iters >= patience
+
+    return step
