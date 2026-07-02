@@ -67,6 +67,7 @@ class Metamorphosis:
         path_s0: str = None,
         path_s1: str = None,
         verbose: bool = True,
+        warm_start_velocity=None,
         **solver_kwargs,
     ) -> "Metamorphosis":
         a0 = torch.tensor(Image(path_a0).array, dtype=torch.float32)
@@ -81,7 +82,7 @@ class Metamorphosis:
 
         solver = MetamorphosisSolver(**solver_kwargs)
         velocity, trajectory, warp, mask_trajectory = solver.fit(
-            a0, a1, s0, s1, verbose=verbose
+            a0, a1, s0, s1, verbose=verbose, warm_start_velocity=warm_start_velocity
         )
 
         with torch.no_grad():
@@ -109,7 +110,7 @@ class Metamorphosis:
             "pyramid_scales": list(solver.pyramid_scales),
             "native_shape": list(a0.shape),
         }
-        return cls(
+        result = cls(
             a_traj,
             v_traj_x,
             v_traj_y,
@@ -124,6 +125,10 @@ class Metamorphosis:
             path_s0=path_s0,
             path_s1=path_s1,
         )
+        # Transient: used by MetamorphosisSeries for warm-start chaining only.
+        # Not saved, not part of the data model.
+        result._velocity = velocity
+        return result
 
     @classmethod
     def load(cls, directory: str) -> "Metamorphosis":

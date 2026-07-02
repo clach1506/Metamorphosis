@@ -46,3 +46,7 @@ class MetamorphosisEnergy:
             loss = loss + self.seg_weight * energy_seg
 
         return loss, energy_kinetic, energy_data, energy_seg
+
+
+# other possible energy to minimize: 
+

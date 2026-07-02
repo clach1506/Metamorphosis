@@ -164,6 +164,57 @@ class MetamorphosisVisualizer:
             ax.axis("off")
         self._save(fig, output_path)
 
+    def plot_residual_on_segmentation(self, output_path: str):
+        if self.m.s_traj is None:
+            raise ValueError(
+                "no segmentation data on this Metamorphosis "
+                "(fit with path_s0/path_s1, or load a directory that has s_traj.npy)"
+            )
+        z_cum_abs = self.m.residual_magnitude()
+        z_cum_signed = self.m.z_traj.sum(axis=0)
+
+        fig, axes = plt.subplots(1, 4, figsize=(17, 4.2))
+
+        axes[0].imshow(self.m.a_traj[0], cmap="gray", vmin=0, vmax=1)
+        axes[0].contour(self.m.s_traj[0] > 0.5, levels=[0.5], colors="lime", linewidths=1.5)
+        axes[0].set_title("a(0)  [green = S(0)]")
+
+        axes[1].imshow(self.m.a_target, cmap="gray", vmin=0, vmax=1)
+        axes[1].contour(self.m.s_target > 0.5, levels=[0.5], colors="lime", linewidths=1.5)
+        axes[1].set_title("a(1)  [green = S(1)]")
+
+        im2 = axes[2].imshow(z_cum_abs, cmap="inferno", vmin=0)
+        axes[2].contour(self.m.s_target > 0.5, levels=[0.5], colors="lime", linewidths=1.5)
+        axes[2].set_title("Cumulative |z|\n[green = S(1)]")
+        plt.colorbar(im2, ax=axes[2], fraction=0.046)
+
+        vmax_signed = max(np.abs(z_cum_signed).max(), 1e-9)
+        im3 = axes[3].imshow(z_cum_signed, cmap="RdBu_r", vmin=-vmax_signed, vmax=vmax_signed)
+        axes[3].contour(self.m.s_target > 0.5, levels=[0.5], colors="lime", linewidths=1.5)
+        axes[3].set_title("Signed Σz\n[green = S(1)]")
+        plt.colorbar(im3, ax=axes[3], fraction=0.046)
+
+        for ax in axes:
+            ax.axis("off")
+        self._save(fig, output_path, dpi=140)
+
+    def export_residual_on_segmentation_frames(self, output_dir: str):
+        if self.m.s_traj is None:
+            raise ValueError(
+                "no segmentation data on this Metamorphosis "
+                "(fit with path_s0/path_s1, or load a directory that has s_traj.npy)"
+            )
+        os.makedirs(output_dir, exist_ok=True)
+        vmax = max(np.abs(self.m.z_traj).max(), 1e-9)
+        for t in range(self.T):
+            fig, ax = plt.subplots(figsize=(6, 6))
+            ax.imshow(self.m.z_traj[t], cmap="RdBu_r", vmin=-vmax, vmax=vmax)
+            ax.contour(self.m.s_traj[t] > 0.5, levels=[0.5], colors="lime", linewidths=1.5)
+            ax.set_title(f"Residual z(t={t})  [green = S(t)]")
+            ax.axis("off")
+            self._save(fig, f"{output_dir}/residual_seg_{t:03d}.png", dpi=140)
+        self._save_colorbar(f"{output_dir}/_colorbar.png", "RdBu_r", -vmax, vmax)
+
     def plot_pure_vs_fitted_segmentation(self, output_path: str):
         # The fitted S(T) (right) is anchored to S(1) by construction (just
         # like a(T)/a(1)), so its Dice is trivially ~1.0 -- the middle panel
@@ -469,9 +520,15 @@ class MetamorphosisVisualizer:
             self.plot_pure_vs_fitted_segmentation(
                 f"{output_dir}/fig_pure_vs_fitted_segmentation.png"
             )
+            self.plot_residual_on_segmentation(
+                f"{output_dir}/fig_residual_on_segmentation.png"
+            )
             self.export_segmentation_frames(f"{output_dir}/frames_segmentation")
             self.export_pure_deformation_segmentation_frames(
                 f"{output_dir}/frames_segmentation_pure"
+            )
+            self.export_residual_on_segmentation_frames(
+                f"{output_dir}/frames_residual_segmentation"
             )
         self.export_trajectory_frames(f"{output_dir}/frames")
         self.export_deformation_grid_frames(f"{output_dir}/frames_deformation")

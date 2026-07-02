@@ -26,5 +26,5 @@ class SemiLagrangianWarp:
         # bounds), so any padding mode works; use 'zeros', which MPS supports.
         grid = grid.clamp(-1.0, 1.0)
         out = Fnn.grid_sample(image.unsqueeze(0).unsqueeze(0), grid,
-                               mode='bilinear', padding_mode='zeros', align_corners=True)
+                               mode='bicubic', padding_mode='zeros', align_corners=True)
         return out.squeeze(0).squeeze(0)

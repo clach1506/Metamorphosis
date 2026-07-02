@@ -67,6 +67,7 @@ class MetamorphosisSolver:
         s0_full: torch.Tensor = None,
         s1_full: torch.Tensor = None,
         verbose: bool = True,
+        warm_start_velocity: "VelocityField" = None,
     ):
         use_seg = s0_full is not None and s1_full is not None
         a0_full, a1_full = a0_full.to(self.device), a1_full.to(self.device)
@@ -91,7 +92,10 @@ class MetamorphosisSolver:
                 s1 = ResolutionPyramid.resize_image(s1_full, (h, w))
 
             if velocity is None:
-                velocity = VelocityField.zeros(self.T, h, w, kernel, device=self.device)
+                if warm_start_velocity is not None:
+                    velocity = warm_start_velocity.upsampled((h, w), kernel)
+                else:
+                    velocity = VelocityField.zeros(self.T, h, w, kernel, device=self.device)
                 trajectory = ImageTrajectory.linear_init(a0, a1, self.T)
                 if use_seg:
                     mask_trajectory = ImageTrajectory.linear_init(s0, s1, self.T)

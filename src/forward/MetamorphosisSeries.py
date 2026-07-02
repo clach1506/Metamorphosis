@@ -35,6 +35,7 @@ class MetamorphosisSeries:
         image_paths: list,
         mask_paths: list = None,
         verbose: bool = True,
+        warm_start: bool = False,
         **solver_kwargs,
     ) -> "MetamorphosisSeries":
         if len(image_paths) < 2:
@@ -49,11 +50,14 @@ class MetamorphosisSeries:
 
         n_legs = len(image_paths) - 1
         legs = []
+        prev_velocity = None
         for n in range(n_legs):
             if verbose:
+                ws_str = "  [warm start]" if (warm_start and prev_velocity is not None) else ""
                 print(
                     f"\n=== Leg {n + 1}/{n_legs}: "
-                    f"{os.path.basename(image_paths[n])} -> {os.path.basename(image_paths[n + 1])} ==="
+                    f"{os.path.basename(image_paths[n])} -> {os.path.basename(image_paths[n + 1])}"
+                    f"{ws_str} ==="
                 )
             leg = Metamorphosis.fit(
                 image_paths[n],
@@ -61,8 +65,11 @@ class MetamorphosisSeries:
                 path_s0=mask_paths[n] if use_seg else None,
                 path_s1=mask_paths[n + 1] if use_seg else None,
                 verbose=verbose,
+                warm_start_velocity=prev_velocity if warm_start else None,
                 **solver_kwargs,
             )
+            if warm_start:
+                prev_velocity = getattr(leg, "_velocity", None)
             legs.append(leg)
 
         solver_config = legs[0].solver_config
