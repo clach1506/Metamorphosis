@@ -4,7 +4,6 @@
 # Optionally takes a second "segmentation" channel (s0_full/s1_full) sharing
 # the SAME velocity field as the image channel -- see Energy.py. This is
 # purely additive: pass nothing and it behaves exactly as before.
-#
 
 import os
 import torch
@@ -23,7 +22,7 @@ class MetamorphosisSolver:
         self,
         T=10,
         lambda_data=20.0,
-        lambda_seg=0.0,
+        lambda_seg=None,
         kernel_sigma_frac=0.03,
         pyramid_scales=(1 / 8, 1 / 4, 1 / 2, 1.0),
         level_iters=(400, 300, 250, 300),
@@ -36,7 +35,8 @@ class MetamorphosisSolver:
         self.T = T
         self.dt = 1.0 / T
         self.lambda_data = lambda_data
-        self.lambda_seg = lambda_seg  # 0.0 = segmentation channel disabled
+        # None = automatic: lambda_data when masks are passed to fit(), else 0.
+        self.lambda_seg = lambda_seg
         self.kernel_sigma_frac = kernel_sigma_frac
         self.pyramid_scales = pyramid_scales
         self.level_iters = (
@@ -67,9 +67,20 @@ class MetamorphosisSolver:
         s0_full: torch.Tensor = None,
         s1_full: torch.Tensor = None,
         verbose: bool = True,
-        warm_start_velocity: "VelocityField" = None,
     ):
-        use_seg = s0_full is not None and s1_full is not None
+        use_seg = self._check_inputs(a0_full, a1_full, s0_full, s1_full)
+        lambda_seg = self.lambda_seg
+        if lambda_seg is None:
+            lambda_seg = self.lambda_data if use_seg else 0.0
+        if use_seg and lambda_seg <= 0:
+            raise ValueError(
+                "masks were given but lambda_seg <= 0: the mask trajectory would be "
+                "unconstrained. Omit the masks for an image-only fit, or set lambda_seg > 0."
+            )
+        if not use_seg and lambda_seg > 0:
+            raise ValueError("lambda_seg > 0 needs both masks (s0_full and s1_full)")
+        self.lambda_seg_used = lambda_seg
+
         a0_full, a1_full = a0_full.to(self.device), a1_full.to(self.device)
         if use_seg:
             s0_full, s1_full = s0_full.to(self.device), s1_full.to(self.device)
@@ -77,7 +88,7 @@ class MetamorphosisSolver:
         pyramid = ResolutionPyramid(
             H0, W0, self.pyramid_scales, self.level_iters, self.level_lrs
         )
-        energy_fn = MetamorphosisEnergy(self.dt, self.lambda_data, self.lambda_seg)
+        energy_fn = MetamorphosisEnergy(self.dt, self.lambda_data, lambda_seg)
 
         velocity = trajectory = mask_trajectory = warp = None
         self.history = []
@@ -92,10 +103,7 @@ class MetamorphosisSolver:
                 s1 = ResolutionPyramid.resize_image(s1_full, (h, w))
 
             if velocity is None:
-                if warm_start_velocity is not None:
-                    velocity = warm_start_velocity.upsampled((h, w), kernel)
-                else:
-                    velocity = VelocityField.zeros(self.T, h, w, kernel, device=self.device)
+                velocity = VelocityField.zeros(self.T, h, w, kernel, device=self.device)
                 trajectory = ImageTrajectory.linear_init(a0, a1, self.T)
                 if use_seg:
                     mask_trajectory = ImageTrajectory.linear_init(s0, s1, self.T)
@@ -153,3 +161,22 @@ class MetamorphosisSolver:
                     break
 
         return velocity, trajectory, warp, mask_trajectory
+
+    @staticmethod
+    def _check_inputs(a0, a1, s0, s1) -> bool:
+        # Returns whether the segmentation channel is used.
+        if a0.ndim != 2 or a0.shape != a1.shape:
+            raise ValueError(
+                f"a0 and a1 must be 2D images of the same shape "
+                f"(got {tuple(a0.shape)} and {tuple(a1.shape)})"
+            )
+        if (s0 is None) != (s1 is None):
+            raise ValueError("pass both masks (s0 and s1) or neither")
+        if s0 is None:
+            return False
+        if s0.shape != a0.shape or s1.shape != a0.shape:
+            raise ValueError(
+                f"masks must match the image shape {tuple(a0.shape)} "
+                f"(got {tuple(s0.shape)} and {tuple(s1.shape)})"
+            )
+        return True

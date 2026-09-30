@@ -8,6 +8,12 @@ import torch.nn.functional as Fnn
 
 class ResolutionPyramid:
     def __init__(self, base_height: int, base_width: int, scales, iters, lrs, min_size: int = 8):
+        if not len(scales) == len(iters) == len(lrs):
+            # zip() would otherwise silently drop levels
+            raise ValueError(
+                f"pyramid_scales, level_iters and level_lrs must have the same length "
+                f"(got {len(scales)}, {len(iters)}, {len(lrs)})"
+            )
         self.sizes = [(max(min_size, round(base_height * s)), max(min_size, round(base_width * s)))
                       for s in scales]
         self.iters = iters

@@ -33,7 +33,11 @@ class GaussianKernel:
         return g / g.sum()
 
     def _separable_conv(self, field: torch.Tensor, sigma: float) -> torch.Tensor:
-        kernel_1d = self._gaussian_kernel_1d(sigma, device=field.device)
+        # Reflect padding needs pad < dim: cap the kernel support on small
+        # (coarse pyramid level) grids instead of crashing.
+        max_ksize = 2 * min(field.shape[-2:]) - 1
+        ksize = min(int(6 * sigma) | 1, max_ksize)
+        kernel_1d = self._gaussian_kernel_1d(sigma, ksize, device=field.device)
         pad = kernel_1d.shape[0] // 2
         kx = kernel_1d.view(1, 1, 1, -1)
         ky = kernel_1d.view(1, 1, -1, 1)

@@ -1,27 +1,23 @@
-*.png
-!tests/fixtures/**/*.png
+# Data and outputs (patient data is never committed)
 /BDD_AMD_062026
+/results
+notebook_outputs*/
+*.png
 *.npy
 *.np
 *.npz
-/.venv
-__pycache__/
-.DS_Store
-*.txt
-!requirements.txt
-*.json
-!**/meta.json
-!**/summary.txt
-.env
-*.tex
-*.txt
-
 *.pdf
 *.gif
+*.tex
+*.json
+*.txt
+!requirements.txt
 
-*_quality.ipynb
-notebook_outputs_seg/
-notebook_outputs/
-notebook_outputs_series/
+# Environment
+/.venv
+.env
+__pycache__/
+.pytest_cache/
 .ipynb_checkpoints/
-
+.DS_Store
+*_quality.ipynb
